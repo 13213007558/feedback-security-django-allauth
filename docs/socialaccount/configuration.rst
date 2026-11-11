@@ -15,26 +15,54 @@ Available settings:
 
 ``SOCIALACCOUNT_EMAIL_AUTHENTICATION`` (default: ``False``)
   Consider a scenario where a social login occurs, and the social account comes
-  with a verified email address (verified by the account provider), but that
-  email address is already taken by a local user account. Additionally, assume
-  that the local user account does not have any social account connected. Now,
-  if the provider can be fully trusted, you can argue that we should treat this
-  scenario as a login to the existing local user account even if the local
-  account does not already have the social account connected, because --
-  according to the provider -- the user logging in has ownership of the email
-  address.  This is how this scenario is handled when
-  ``SOCIALACCOUNT_EMAIL_AUTHENTICATION`` is set to ``True``. As this implies
-  that an untrustworthy provider can login to any local account by fabricating
-  social account data, this setting defaults to ``False``. Only set it to
-  ``True`` if you are using providers that can be fully trusted. Instead of
-  turning this on globally, you can also turn it on selectively per provider,
-  for example::
+  with an email address that is already taken by a local user account.
+  Additionally, assume that the local user account does not have any social
+  account connected. Whether this login is treated as a login to the existing
+  local user account depends on two separate decisions:
+
+  - *Does the provider claim the email is verified?* Only email addresses that
+    the provider itself marks as verified (for example, via ``email_verified``
+    in OpenID Connect) are ever considered for authentication. Emails the
+    provider reports as unverified are always ignored, no matter how the
+    settings below are configured.
+
+  - *Does your site trust that claim?* This is what
+    ``SOCIALACCOUNT_EMAIL_AUTHENTICATION`` controls. If the provider can be
+    fully trusted, you can argue that we should treat this scenario as a login
+    to the existing local user account even if the local account does not
+    already have the social account connected, because -- according to the
+    provider -- the user logging in has ownership of the email address.
+
+  As trusting a provider's claim implies that an untrustworthy provider can
+  login to any local account by fabricating social account data, this setting
+  defaults to ``False`` -- no provider is trusted. Only enable it for
+  providers that can be fully trusted, and prefer the narrowest scope that
+  fits. Trust can be granted per app (recommended), per provider, or globally::
 
       SOCIALACCOUNT_PROVIDERS = {
-        'google': {
-            'EMAIL_AUTHENTICATION': True
-        }
+          'openid_connect': {
+              'APPS': [
+                  {
+                      'provider_id': 'keycloak',
+                      'name': 'Keycloak',
+                      'client_id': '...',
+                      'secret': '...',
+                      'settings': {
+                          'server_url': 'https://keycloak.example.com/...',
+                          # Trust the verified-email claims of THIS app only.
+                          'email_authentication': True,
+                      },
+                  },
+              ],
+              # Trusts verified-email claims from EVERY app of this provider:
+              # 'EMAIL_AUTHENTICATION': True,
+          },
       }
+      # Trusts verified-email claims from ALL configured providers -- avoid:
+      # SOCIALACCOUNT_EMAIL_AUTHENTICATION = True
+
+  Note that each wider scope silently extends trust to more providers,
+  including providers or apps added to the configuration later on.
 
 ``SOCIALACCOUNT_EMAIL_AUTHENTICATION_AUTO_CONNECT`` (default: ``False``)
   In case email authentication is applied, this setting controls whether or not
