@@ -4,6 +4,7 @@ from http import HTTPStatus
 from typing import Any
 
 from django.contrib.auth.decorators import login_required
+from django.core.exceptions import ValidationError
 from django.http import (
     HttpRequest,
     HttpResponse,
@@ -136,7 +137,14 @@ class ConnectionsView(AjaxCapableProcessFormViewMixin, FormView):
         return kwargs
 
     def form_valid(self, form) -> HttpResponse:
-        form.save()
+        try:
+            form.save()
+        except ValidationError as e:
+            # The account failed the (locked) re-validation performed at
+            # delete time -- e.g. a concurrent disconnect already removed the
+            # last other login method.
+            form.add_error(None, e)
+            return self.form_invalid(form)
         return super().form_valid(form)
 
     def get_ajax_data(self) -> dict:

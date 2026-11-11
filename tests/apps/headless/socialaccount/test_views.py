@@ -107,6 +107,7 @@ def test_disconnect_bad_request(auth_client, user, headless_reverse, provider_id
 def test_disconnect_not_allowed(auth_client, user, headless_reverse, provider_id):
     user.set_unusable_password()
     user.save(update_fields=["password"])
+    EmailAddress.objects.filter(user=user).update(verified=False)
     auth_client.force_login(user)
     account = SocialAccount.objects.create(user=user, uid="123", provider=provider_id)
     resp = auth_client.delete(

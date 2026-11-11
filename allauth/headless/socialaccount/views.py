@@ -97,7 +97,13 @@ class ManageProvidersView(AuthenticatedAPIView):
         return SocialAccountsResponse(request, accounts)
 
     def delete(self, request: HttpRequest, *args: Any, **kwargs: Any) -> HttpResponse:
-        flows.connect.disconnect(request, self.input.cleaned_data["account"])
+        try:
+            flows.connect.disconnect(request, self.input.cleaned_data["account"])
+        except ValidationError as e:
+            # The account failed the (locked) re-validation performed at
+            # delete time -- e.g. a concurrent disconnect already removed the
+            # last other login method.
+            return ErrorResponse(request, exception=e)
         return self.respond_provider_accounts(request)
 
     def get_input_kwargs(self) -> dict:

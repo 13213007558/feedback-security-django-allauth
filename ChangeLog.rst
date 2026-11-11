@@ -1,3 +1,17 @@
+65.21.2 (unreleased)
+********************
+
+Security notice
+---------------
+
+- socialaccount: Concurrently disconnecting a user's last two social accounts
+  could both pass validation (each still seeing the other account), potentially
+  locking the user out of their account. Disconnecting now re-validates against
+  the locked database state at delete time, so at least one usable login or
+  recovery method always remains. A verified email address now counts as a
+  recovery method, as it allows regaining access via password reset.
+
+
 65.21.1 (2026-10-30)
 ********************
 

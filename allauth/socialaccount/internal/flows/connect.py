@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied, ValidationError
+from django.db import transaction
 from django.http import HttpRequest, HttpResponseRedirect
 
 from allauth import app_settings as allauth_settings
@@ -26,17 +27,20 @@ def validate_disconnect(request: HttpRequest, account) -> None:
     if is_last:
         if allauth_settings.SOCIALACCOUNT_ONLY:
             raise adapter.validation_error("disconnect_last")
-        # No usable password would render the local account unusable
-        if not account.user.has_usable_password():
+        has_usable_password = account.user.has_usable_password()
+        has_verified_email = EmailAddress.objects.filter(
+            user_id=account.user_id, verified=True
+        ).exists()
+        # No usable password and no verified email address to recover the
+        # account with would render the local account unusable.
+        if not has_usable_password and not has_verified_email:
             raise adapter.validation_error("no_password")
         # No email address, no password reset
         if (
             account_settings.EMAIL_VERIFICATION
             == account_settings.EmailVerificationMethod.MANDATORY
         ):
-            if not EmailAddress.objects.filter(
-                user=account.user, verified=True
-            ).exists():
+            if not has_verified_email:
                 raise adapter.validation_error("no_verified_email")
     adapter.validate_disconnect(account, accounts)
 
@@ -45,25 +49,42 @@ def disconnect(request: HttpRequest, account) -> None:
     flows.reauthentication.raise_if_reauthentication_required(
         request, app="allauth.socialaccount"
     )
+    account_adapter = get_account_adapter()
+    with transaction.atomic():
+        # NOTE: Concurrent disconnect requests must not both pass validation
+        # while each still sees the other account, as that could leave the
+        # user without any usable login or recovery method. Therefore, lock
+        # the user row and re-validate against the same database state that
+        # the deletion below operates on. The social account itself cannot be
+        # locked, as it is the row being deleted. Using the user row
+        # instead...
+        account.user.__class__._default_manager.select_for_update().get(
+            pk=account.user_id
+        )
+        # (end NOTE)
+        validate_disconnect(request, account)
+        provider = account.get_provider()
+        account.delete()
 
-    get_account_adapter().add_message(
-        request,
-        messages.INFO,
-        "socialaccount/messages/account_disconnected.txt",
-    )
-    provider = account.get_provider()
-    account.delete()
-    signals.social_account_removed.send(
-        sender=SocialAccount, request=request, socialaccount=account
-    )
-    get_adapter().send_notification_mail(
-        "socialaccount/email/account_disconnected",
-        request.user,
-        context={
-            "account": account,
-            "provider": provider,
-        },
-    )
+        def on_commit() -> None:
+            account_adapter.add_message(
+                request,
+                messages.INFO,
+                "socialaccount/messages/account_disconnected.txt",
+            )
+            signals.social_account_removed.send(
+                sender=SocialAccount, request=request, socialaccount=account
+            )
+            account_adapter.send_notification_mail(
+                "socialaccount/email/account_disconnected",
+                request.user,
+                context={
+                    "account": account,
+                    "provider": provider,
+                },
+            )
+
+        transaction.on_commit(on_commit)
 
 
 def resume_connect(request: HttpRequest, serialized_state):
