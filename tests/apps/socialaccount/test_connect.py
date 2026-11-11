@@ -50,6 +50,53 @@ def test_connect_with_reauthentication(
     assert SocialAccount.objects.filter(user=user).exists()
 
 
+def test_connect_stash_not_resumed_for_other_user(
+    auth_client,
+    user,
+    user_factory,
+    provider_callback_response,
+    settings,
+    user_password,
+    mailoutbox,
+):
+    """The connect action is stashed, pending reauthentication. In another
+    tab, the user logs out and a different user logs in. Resuming must not
+    attach the social account to the other user."""
+    settings.ACCOUNT_REAUTHENTICATION_REQUIRED = True
+    settings.ACCOUNT_EMAIL_NOTIFICATIONS = True
+    resp = provider_callback_response(auth_client, process="connect")
+    assert resp["location"] == reverse("account_reauthenticate")
+
+    other_user = user_factory()
+    auth_client.post(reverse("account_logout"))
+    auth_client.force_login(other_user)
+    resp = auth_client.post(
+        reverse("account_reauthenticate"), {"password": user_password}
+    )
+    assert resp.status_code == HTTPStatus.FOUND
+    assert not SocialAccount.objects.filter(user=other_user).exists()
+    assert not SocialAccount.objects.filter(user=user).exists()
+    assert len(mailoutbox) == 0
+
+
+def test_connect_resume_twice(
+    auth_client, user, provider_callback_response, settings, user_password, mailoutbox
+):
+    """Submitting the reauthentication (resume) entry twice must not connect
+    the account twice nor send duplicate notifications."""
+    settings.ACCOUNT_REAUTHENTICATION_REQUIRED = True
+    settings.ACCOUNT_EMAIL_NOTIFICATIONS = True
+    resp = provider_callback_response(auth_client, process="connect")
+    assert resp["location"] == reverse("account_reauthenticate")
+    reauthenticate_url = resp["location"]
+    for _ in range(2):
+        resp = auth_client.post(reauthenticate_url, {"password": user_password})
+        assert resp.status_code == HTTPStatus.FOUND
+    assert SocialAccount.objects.filter(user=user).count() == 1
+    assert len(mailoutbox) == 1
+    assert mailoutbox[0].subject == "[example.com] Third-Party Account Connected"
+
+
 def test_connect(
     auth_client, user, provider_callback_response, settings, user_password, mailoutbox
 ):

@@ -15,6 +15,7 @@ from allauth.account.internal.flows.login import (
     get_authentication_records,
     record_authentication,
 )
+from allauth.account.internal.userkit import user_id_to_str
 from allauth.core.exceptions import ReauthenticationRequired
 from allauth.core.internal.httpkit import (
     authenticated_user,
@@ -26,6 +27,13 @@ from allauth.utils import import_callable
 
 
 STATE_SESSION_KEY = "account_reauthentication_state"
+
+
+def _get_state_user_id(request: HttpRequest) -> str | None:
+    user = request.user
+    if not user.is_authenticated:
+        return None
+    return user_id_to_str(user)
 
 
 def reauthenticate_by_password(request: HttpRequest) -> None:
@@ -40,6 +48,7 @@ def stash_and_reauthenticate(
     request.session[STATE_SESSION_KEY] = {
         "state": state,
         "callback": callback,
+        "user_id": _get_state_user_id(request),
     }
     return HttpResponseRedirect(reverse("account_reauthenticate"))
 
@@ -47,7 +56,10 @@ def stash_and_reauthenticate(
 def suspend_request(request: HttpRequest, redirect_to: str) -> HttpResponseRedirect:
     path = request.get_full_path()
     if request.method == "POST":
-        request.session[STATE_SESSION_KEY] = {"request": serialize_request(request)}
+        request.session[STATE_SESSION_KEY] = {
+            "request": serialize_request(request),
+            "user_id": _get_state_user_id(request),
+        }
     return HttpResponseRedirect(
         f"{redirect_to}?{urlencode({REDIRECT_FIELD_NAME: path})}"
     )
@@ -57,6 +69,11 @@ def resume_request(request: HttpRequest) -> HttpResponseRedirect | None:
     from allauth.account.utils import get_next_redirect_url
 
     state = request.session.pop(STATE_SESSION_KEY, None)
+    if state and state.get("user_id") != _get_state_user_id(request):
+        # The stashed action was initiated under a different principal (e.g.
+        # the session was anonymous at stash time, or the user changed).
+        # Never resume it under the current user.
+        state = None
     if state and "callback" in state:
         callback = import_callable(state["callback"])
         return callback(request, state["state"])
